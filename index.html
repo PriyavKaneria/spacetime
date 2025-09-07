@@ -86,6 +86,7 @@
             display: none;
         }
     </style>
+    <script defer src="https://umami-sable-xi.vercel.app/script.js" data-website-id="9b6681ea-4bc5-4504-83be-dd931845569d"></script>
 </head>
 
 <body>
@@ -318,7 +319,7 @@
             clearFrames();
             document.getElementById('status').textContent = 'Camera stopped';
             document.getElementById('startBtn').disabled = false;
-            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('stopBtn').textContent = 'Start Camera';
         }
 
         // Start capturing frames
@@ -457,6 +458,11 @@
         });
 
         document.getElementById('stopBtn').addEventListener('click', () => {
+            if (!capturing) {
+                startCamera();
+                document.getElementById('stopBtn').textContent = 'Stop Camera';
+                return;
+            }
             stopCamera()
         })
 
