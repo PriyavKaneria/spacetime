@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>spacetime fun</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+            min-width: 250px;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            margin-bottom: 5px;
+        }
+
+        input[type="number"] {
+            width: 60px;
+            padding: 2px;
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 3px;
+        }
+
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+
+        button:hover {
+            background: #45a049;
+        }
+
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+
+        #status {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #ccc;
+        }
+
+        #hiddenVideo {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <div id="controls">
+            <h3 style="margin-top: 0;">fun with spacetime</h3>
+
+            <button id="startBtn">Pause Camera</button>
+            <button id="stopBtn" disabled>Stop Camera</button>
+
+            <div class="control-group">
+                <label>Frame Gap: <span id="gapValue">25</span>px</label>
+                <input type="range" id="gapSlider" min="10" max="200" value="25">
+            </div>
+
+            <div class="control-group">
+                <label>Opacity: <span id="opacityValue">50</span>%</label>
+                <input type="range" id="opacitySlider" min="10" max="100" value="50">
+            </div>
+
+            <div class="control-group">
+                <label>Trail Size: <span id="trailValue">40</span> frames</label>
+                <input type="range" id="trailSlider" min="10" max="100" value="40">
+            </div>
+
+            <div class="control-group">
+                <label>End Scale: <span id="scaleValue">0.8</span></label>
+                <input type="range" id="scaleSlider" min="0.5" max="3" step="0.1" value="0.8">
+            </div>
+
+            <div class="control-group">
+                <label>Trail Rotation Z: <span id="rotZValue">0</span>°</label>
+                <input type="range" id="rotZSlider" min="-180" max="180" step="1" value="0">
+            </div>
+
+            <div class="control-group">
+                <label>Trail Rotation Y: <span id="rotYValue">72</span>°</label>
+                <input type="range" id="rotYSlider" min="-180" max="180" step="1" value="72">
+            </div>
+
+            <div class="control-group">
+                <label>Frames per Second: <span id="fpsValue">30</span></label>
+                <input type="range" id="fpsSlider" min="10" max="60" step="5" value="30">
+            </div>
+
+            <div id="status"></div>
+            <div id="cameraStatus" style="margin-top:10px; font-size:12px; color:#aaa;"></div>
+        </div>
+        <video id="hiddenVideo" autoplay muted></video>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer;
+        let frameTrail = [];
+        let video, videoTexture;
+        let animationId;
+        let capturing = false;
+        // Remove mouseX/mouseY, add controls state
+        let cameraGroup;
+
+        // Drag controls state
+        let isDragging = false;
+        let dragMode = null; // 'rotate' | 'pan'
+        let lastX = 0, lastY = 0;
+        let panOffset = { x: 0, y: 0 };
+        let zoom = 1;
+
+        // Parameters
+        let params = {
+            isPaused: false,
+            gap: 50,
+            opacity: 50,
+            trailSize: 20,
+            endScale: 0.5,
+            rotationZ: 0, // degrees
+            rotationY: 0, // degrees
+            rotationSpeed: 1,
+            fps: 30,
+            frameInterval: null
+        };
+
+        // Initialize Three.js scene
+        function initThreeJS() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setClearColor(0x000000);
+            document.getElementById('container').appendChild(renderer.domElement);
+
+            // Create camera group for mouse controls
+            cameraGroup = new THREE.Group();
+            scene.add(cameraGroup);
+            camera.position.set(0, 0, 200);
+            cameraGroup.add(camera);
+            cameraGroup.rotation.y = 60 * Math.PI / 180;
+
+            // Add some ambient lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(1, 1, 1);
+            scene.add(directionalLight);
+
+            // === MOVE ALL DRAG/ZOOM EVENT LISTENERS HERE ===
+            renderer.domElement.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                lastX = e.clientX;
+                lastY = e.clientY;
+                // Left button: rotate, Right button or Ctrl: pan
+                if (e.button === 2 || e.ctrlKey) {
+                    dragMode = 'pan';
+                } else {
+                    dragMode = 'rotate';
+                }
+            });
+
+            renderer.domElement.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                const dx = e.clientX - lastX;
+                const dy = e.clientY - lastY;
+                lastX = e.clientX;
+                lastY = e.clientY;
+                if (dragMode === 'rotate') {
+                    cameraGroup.rotation.y += dx * 0.01 * params.rotationSpeed;
+                    cameraGroup.rotation.x += dy * 0.01 * params.rotationSpeed;
+                } else if (dragMode === 'pan') {
+                    panOffset.x += dx * 0.5;
+                    panOffset.y -= dy * 0.5;
+                }
+            });
+
+            renderer.domElement.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+            renderer.domElement.addEventListener('mouseleave', () => {
+                isDragging = false;
+            });
+            renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+            // Zoom with mouse wheel
+            renderer.domElement.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                zoom *= (e.deltaY > 0) ? 0.95 : 1.05;
+                zoom = Math.max(0.2, Math.min(zoom, 5));
+            }, { passive: false });
+
+            // Touch controls for mobile (drag to rotate, pinch to zoom)
+            let touchStartX = 0, touchStartY = 0, touchStartDist = 0, lastRotation = { x: 0, y: 0 }, lastZoom = 1;
+            renderer.domElement.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 1) {
+                    isDragging = true;
+                    dragMode = 'rotate';
+                    touchStartX = e.touches[0].clientX;
+                    touchStartY = e.touches[0].clientY;
+                    lastRotation.x = cameraGroup.rotation.x;
+                    lastRotation.y = cameraGroup.rotation.y;
+                } else if (e.touches.length === 2) {
+                    isDragging = false;
+                    dragMode = null;
+                    touchStartDist = Math.hypot(
+                        e.touches[0].clientX - e.touches[1].clientX,
+                        e.touches[0].clientY - e.touches[1].clientY
+                    );
+                    lastZoom = zoom;
+                }
+            });
+
+            renderer.domElement.addEventListener('touchmove', (e) => {
+                if (e.touches.length === 1 && dragMode === 'rotate') {
+                    const dx = e.touches[0].clientX - touchStartX;
+                    const dy = e.touches[0].clientY - touchStartY;
+                    cameraGroup.rotation.y = lastRotation.y + dx * 0.01 * params.rotationSpeed;
+                    cameraGroup.rotation.x = lastRotation.x + dy * 0.01 * params.rotationSpeed;
+                } else if (e.touches.length === 2) {
+                    const dist = Math.hypot(
+                        e.touches[0].clientX - e.touches[1].clientX,
+                        e.touches[0].clientY - e.touches[1].clientY
+                    );
+                    zoom = lastZoom * (dist / touchStartDist);
+                    zoom = Math.max(0.2, Math.min(zoom, 5));
+                }
+                e.preventDefault();
+            }, { passive: false });
+
+            renderer.domElement.addEventListener('touchend', (e) => {
+                isDragging = false;
+                dragMode = null;
+            });
+
+            animate();
+        }
+
+        // Start camera
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 1280, height: 960 }
+                });
+
+                video = document.getElementById('hiddenVideo');
+                video.srcObject = stream;
+                video.play();
+
+                video.addEventListener('loadeddata', () => {
+                    videoTexture = new THREE.VideoTexture(video);
+                    videoTexture.minFilter = THREE.LinearFilter;
+                    videoTexture.magFilter = THREE.LinearFilter;
+
+                    // Only start capturing if not already started
+                    if (!capturing) startCapturing();
+                    document.getElementById('status').textContent = 'Camera active - Move mouse to rotate view';
+                    document.getElementById('stopBtn').disabled = false;
+                });
+
+            } catch (err) {
+                console.error('Error accessing camera:', err);
+                document.getElementById('status').textContent = 'Error: Could not access camera';
+            }
+        }
+
+        // Stop camera
+        function stopCamera() {
+            if (video && video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+            }
+            stopCapturing();
+            clearFrames();
+            document.getElementById('status').textContent = 'Camera stopped';
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+        }
+
+        // Start capturing frames
+        function startCapturing() {
+            if (capturing) return;
+            capturing = true;
+            captureFrame();
+        }
+
+        // Stop capturing frames
+        function stopCapturing() {
+            capturing = false;
+            if (params.frameInterval) {
+                clearTimeout(params.frameInterval);
+                params.frameInterval = null;
+            }
+        }
+
+        // Capture a single frame
+        function captureFrame() {
+            if (!capturing || !videoTexture) return;
+
+            // Create canvas to capture video frame
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            // Flip horizontally for mirror effect
+            ctx.save();
+            ctx.translate(canvas.width, 0);
+            ctx.scale(-1, 1);
+            ctx.drawImage(video, 0, 0);
+            ctx.restore();
+
+            // Create texture from canvas
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.needsUpdate = true;
+
+            // Create plane geometry for the frame
+            const geometry = new THREE.PlaneGeometry(200, 150);
+            const material = new THREE.MeshLambertMaterial({
+                map: texture,
+                transparent: true,
+                opacity: params.opacity / 100,
+            });
+            const plane = new THREE.Mesh(geometry, material);
+
+            // Position the new frame
+            plane.position.z = 0;
+
+            // Move existing frames back
+            frameTrail.forEach((frame, index) => {
+                frame.position.z -= params.gap;
+
+                // Apply scaling
+                const progress = (index + 1) / params.trailSize;
+                const scale = 1 + (params.endScale - 1) * progress;
+                const rotationZ = params.rotationZ * Math.PI / 180 * progress;
+                const rotationY = params.rotationY * Math.PI / 180 * progress;
+                frame.scale.set(scale, scale, 1);
+                frame.rotation.z = rotationZ;
+                frame.rotation.y = rotationY;
+
+                // Apply fading
+                frame.material.opacity = (params.opacity / 100) * (1 - progress * 0.5);
+            });
+
+            // Add new frame to scene and trail
+            scene.add(plane);
+            frameTrail.unshift(plane);
+
+            // Remove excess frames
+            while (frameTrail.length > params.trailSize) {
+                const oldFrame = frameTrail.pop();
+                scene.remove(oldFrame);
+                oldFrame.geometry.dispose();
+                oldFrame.material.dispose();
+            }
+
+            // Schedule next capture
+            params.frameInterval = setTimeout(captureFrame, 1000 / params.fps);
+        }
+
+        // Clear all frames
+        function clearFrames() {
+            frameTrail.forEach(frame => {
+                scene.remove(frame);
+                frame.geometry.dispose();
+                frame.material.dispose();
+            });
+            frameTrail = [];
+        }
+
+        // Animation loop
+        function animate() {
+            animationId = requestAnimationFrame(animate);
+
+            // Clamp cameraGroup.rotation.x to avoid flipping
+            cameraGroup.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, cameraGroup.rotation.x));
+
+            // Apply static Y rotation from parameter (convert degrees to radians)
+            // cameraGroup.rotation.y = params.rotation * Math.PI / 180;
+
+            // Apply pan
+            cameraGroup.position.x = panOffset.x;
+            cameraGroup.position.y = panOffset.y;
+
+            // Apply zoom (camera dolly)
+            camera.position.z = 200 / zoom;
+
+            renderer.render(scene, camera);
+
+            // Update camera group status display
+            const deg = v => (v * 180 / Math.PI).toFixed(1);
+            document.getElementById('cameraStatus').innerHTML =
+                `CameraGroup: X=${cameraGroup.position.x.toFixed(1)}, Y=${cameraGroup.position.y.toFixed(1)}, Z=${cameraGroup.position.z.toFixed(1)}<br>` +
+                `Zoom: ${(200 / camera.position.z).toFixed(2)}<br>` +
+                `Rotation X=${deg(cameraGroup.rotation.x)}°, Y=${deg(cameraGroup.rotation.y)}°, Z=${deg(cameraGroup.rotation.z)}°`;
+        }
+
+        // Event listeners
+        document.getElementById('startBtn').addEventListener('click', () => {
+            if (capturing) {
+                // Pause capturing and video
+                stopCapturing();
+                video.pause();
+                params.isPaused = true;
+                document.getElementById('startBtn').textContent = 'Continue Camera';
+            } else {
+                // Resume capturing and video
+                video.play();
+                params.isPaused = false;
+                startCapturing();
+                document.getElementById('startBtn').textContent = 'Pause Capturing';
+            }
+        });
+
+        document.getElementById('stopBtn').addEventListener('click', () => {
+            stopCamera()
+        })
+
+        // Parameter controls
+        document.getElementById('gapSlider').addEventListener('input', (e) => {
+            params.gap = parseInt(e.target.value);
+            document.getElementById('gapValue').textContent = params.gap;
+        });
+
+        document.getElementById('opacitySlider').addEventListener('input', (e) => {
+            params.opacity = parseInt(e.target.value);
+            document.getElementById('opacityValue').textContent = params.opacity;
+        });
+
+        document.getElementById('trailSlider').addEventListener('input', (e) => {
+            params.trailSize = parseInt(e.target.value);
+            document.getElementById('trailValue').textContent = params.trailSize;
+        });
+
+        document.getElementById('scaleSlider').addEventListener('input', (e) => {
+            params.endScale = parseFloat(e.target.value);
+            document.getElementById('scaleValue').textContent = params.endScale;
+        });
+
+        document.getElementById('rotZSlider').addEventListener('input', (e) => {
+            params.rotationZ = parseInt(e.target.value);
+            document.getElementById('rotZValue').textContent = params.rotationZ;
+        });
+        document.getElementById('rotYSlider').addEventListener('input', (e) => {
+            params.rotationY = parseInt(e.target.value);
+            document.getElementById('rotYValue').textContent = params.rotationY;
+        });
+
+        document.getElementById('fpsSlider').addEventListener('input', (e) => {
+            params.fps = parseInt(e.target.value);
+            document.getElementById('fpsValue').textContent = params.fps;
+        });
+
+        startCamera();
+
+        // Initialize the scene
+        initThreeJS();
+    </script>
+</body>
+
+</html>
